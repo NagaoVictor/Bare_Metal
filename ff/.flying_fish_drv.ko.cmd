@@ -1,0 +1,1 @@
+savedcmd_flying_fish_drv.ko := aarch64-linux-gnu-ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/src/linux-headers-6.18.60+rpt-rpi-v8/arch/arm64/module.lds -o flying_fish_drv.ko flying_fish_drv.o flying_fish_drv.mod.o .module-common.o
