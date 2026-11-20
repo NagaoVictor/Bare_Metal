@@ -3,18 +3,29 @@
 
 / {
     compatible = "brcm,bcm2835";
-    
+
     fragment@0 {
+        target = <&gpio>;
+        __overlay__ {
+            ff_pins: ff_pins {
+                brcm,pins = <17>;
+                brcm,function = <0>; /* 0 = Input */
+                brcm,pull = <2>;     /* 2 = Pull-Up interno ativado */
+            };
+        };
+    };
+
+    fragment@1 {
         target-path = "/";
         __overlay__ {
-          flying_fish_node: flying_fish {
-            compatible = "nagao,flying-fish";
-            /* Pino BCM 17: Sensor Flying Fish (1 = GPIO_ACTIVE_LOW, aciona em 0V) */
-            sensor-gpios = <&gpio 17 1>;
-            /* Pino BCM 27: Buzzer/LED (0 = GPIO_ACTIVE_HIGH, aciona em 3.3V) */
-            buzzer-gpios = <&gpio 27 0>;
-            status = "okay";
-      };
+            flying_fish_node: flying_fish {
+                compatible = "nagao,flying-fish";
+                pinctrl-names = "default";
+                pinctrl-0 = <&ff_pins>;
+                sensor-gpios = <&gpio 17 1>;
+                buzzer-gpios = <&gpio 27 0>;
+                status = "okay";
+            };
+        };
     };
-  };
 };
