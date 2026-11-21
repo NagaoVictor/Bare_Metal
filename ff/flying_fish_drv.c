@@ -1,46 +1,40 @@
 #include <linux/gpio/consumer.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
-#include <linux/ktime.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/workqueue.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Victor Nagao");
-MODULE_DESCRIPTION("Platform Driver com IRQ e Debounce para Sensor Flying Fish");
+MODULE_DESCRIPTION("Platform Driver Sincronizado com Delayed Workqueue para Flying Fish");
 
 struct ff_data {
     struct gpio_desc *sensor_gpio;
     struct gpio_desc *buzzer_gpio;
     int irq_num;
-    u64 last_irq_ns;
+    struct delayed_work debounce_work;
 };
 
-static void atualizar_buzzer(struct ff_data *data) {
-    // gpiod_get_value() já aplica a inversão do ACTIVE_LOW definido no .dts
+// Esta função roda 15ms APÓS o último ruído elétrico, garantindo leitura estável
+static void ff_work_handler(struct work_struct *work) {
+    struct ff_data *data = container_of(work, struct ff_data, debounce_work.work);
     int ativo = gpiod_get_value(data->sensor_gpio);
-    // gpiod_get_raw_value() lê a tensão física real (0 = 0V, 1 = 3.3V)
-    int fisico = gpiod_get_raw_value(data->sensor_gpio);
 
     gpiod_set_value(data->buzzer_gpio, ativo);
-
-    pr_info("flying_fish: [IRQ] Tensao fisica=%d | Logico ativo=%d -> Buzzer %s\n",
-            fisico, ativo, ativo ? "LIGADO" : "DESLIGADO");
+    pr_info("flying_fish: [SINCRONIZADO] Sensor=%d -> Buzzer %s\n",
+            ativo, ativo ? "LIGADO" : "DESLIGADO");
 }
 
+// A interrupção apenas reinicia o cronômetro de 15ms a cada borda detectada
 static irqreturn_t sensor_irq_handler(int irq, void *dev_id) {
     struct ff_data *data = (struct ff_data *)dev_id;
-    u64 agora = ktime_get_ns();
 
-    // Debounce de software de 20 ms (20.000.000 ns) para filtrar oscilação do LM393
-    if (agora - data->last_irq_ns < 20000000ULL)
-        return IRQ_HANDLED;
-
-    data->last_irq_ns = agora;
-    atualizar_buzzer(data);
-
+    // mod_delayed_work cancela qualquer leitura pendente e empurra para 15ms à frente
+    mod_delayed_work(system_wq, &data->debounce_work, msecs_to_jiffies(15));
     return IRQ_HANDLED;
 }
 
@@ -61,6 +55,9 @@ static int ff_probe(struct platform_device *pdev) {
     if (IS_ERR(data->buzzer_gpio))
         return PTR_ERR(data->buzzer_gpio);
 
+    // Inicializa a fila de trabalho atrasada (Workqueue)
+    INIT_DELAYED_WORK(&data->debounce_work, ff_work_handler);
+
     data->irq_num = gpiod_to_irq(data->sensor_gpio);
     if (data->irq_num < 0)
         return data->irq_num;
@@ -73,14 +70,15 @@ static int ff_probe(struct platform_device *pdev) {
 
     platform_set_drvdata(pdev, data);
 
-    // Sincroniza o estado inicial imediatamente ao carregar o driver
-    atualizar_buzzer(data);
-    pr_info("flying_fish: Driver pronto na IRQ %d!\n", data->irq_num);
+    // Sincroniza o estado inicial na carga do módulo
+    gpiod_set_value(data->buzzer_gpio, gpiod_get_value(data->sensor_gpio));
+    pr_info("flying_fish: Driver sincronizado ativo na IRQ %d!\n", data->irq_num);
     return 0;
 }
 
 static void ff_remove(struct platform_device *pdev) {
     struct ff_data *data = platform_get_drvdata(pdev);
+    cancel_delayed_work_sync(&data->debounce_work); // Garante que não há tarefa pendente
     gpiod_set_value(data->buzzer_gpio, 0);
     pr_info("flying_fish: Driver removido.\n");
 }
